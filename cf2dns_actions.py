@@ -29,7 +29,6 @@ REGION_ALI = 'cn-hongkong'
 #解析生效时间，默认为600秒 如果不是DNS付费版用户 不要修改!!!
 TTL = 600
 #v4为筛选出IPv4的IP  v6为筛选出IPv6的IP
-print(sys.argv)
 if len(sys.argv) >= 2:
     RECORD_TYPE = sys.argv[1]
 else:
@@ -177,6 +176,7 @@ def main(cloud):
             print("CHANGE DNS ERROR: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----MESSAGE: " + str(traceback.print_exc()))
 
 if __name__ == '__main__':
+    print(sys.argv)
     if DNS_SERVER == 1:
         cloud = QcloudApiv3(SECRETID, SECRETKEY)
     elif DNS_SERVER == 2:
