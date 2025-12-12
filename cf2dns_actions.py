@@ -9,6 +9,7 @@ from dns.qCloud import QcloudApiv3 # QcloudApiv3 DNSPod 的 API 更新了 github
 from dns.aliyun import AliApi
 from dns.huawei import HuaWeiApi
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
 #可以从https://shop.hostmonit.com获取
 KEY = os.environ["KEY"]  #"o1zrmHAF"
@@ -34,20 +35,31 @@ if len(sys.argv) >= 2:
 else:
     RECORD_TYPE = "A"
 
+OPTIMIZATION_MAP = {
+    "CM": "https://cf.090227.xyz/cmcc?ips=8", # 移动
+    "CU": "https://cf.090227.xyz/cu", # 联通
+    "CT": "https://cf.090227.xyz/ct?ips=6", # 电信
+    "AB": "https://cf.090227.xyz/CloudFlareYes", # 境外
+    "DEF": "https://cf.090227.xyz/ip.164746.xyz" # 默认
+}
 
-def get_optimization_ip():
+def get_optimization_ip(line):
     try:
-        headers = headers = {'Content-Type': 'application/json'}
-        data = {"key": KEY, "type": "v4" if RECORD_TYPE == "A" else "v6"}
-        response = requests.post('https://api.hostmonit.com/get_optimization_ip', json=data, headers=headers)
+        response = requests.get(OPTIMIZATION_MAP[line])
         if response.status_code == 200:
-            return response.json()
+            list = response.text.split("\n") 
+            result = []
+            for ip in list:
+                if ip:
+                    # 104.19.39.171#CF优选-移动
+                    result.append(ip.split("#")[0])
+            return result
         else:
             print("CHANGE OPTIMIZATION IP ERROR: REQUEST STATUS CODE IS NOT 200")
-            return None
+            return []
     except Exception as e:
         print("CHANGE OPTIMIZATION IP ERROR: " + str(e))
-        return None
+        return []
 
 def changeDNS(line, s_info, c_info, domain, sub_domain, cloud):
     global AFFECT_NUM, RECORD_TYPE
@@ -61,7 +73,7 @@ def changeDNS(line, s_info, c_info, domain, sub_domain, cloud):
             for info in s_info:
                 if len(c_info) == 0:
                     break
-                cf_ip = c_info.pop(random.randint(0,len(c_info)-1))["ip"]
+                cf_ip = c_info.pop(random.randint(0,len(c_info)-1))
                 if cf_ip in str(s_info):
                     continue
                 ret = cloud.change_record(domain, info["recordId"], sub_domain, cf_ip, RECORD_TYPE, line, TTL)
@@ -73,7 +85,7 @@ def changeDNS(line, s_info, c_info, domain, sub_domain, cloud):
             for i in range(create_num):
                 if len(c_info) == 0:
                     break
-                cf_ip = c_info.pop(random.randint(0,len(c_info)-1))["ip"]
+                cf_ip = c_info.pop(random.randint(0,len(c_info)-1))
                 if cf_ip in str(s_info):
                     continue
                 ret = cloud.create_record(domain, sub_domain, cf_ip, RECORD_TYPE, line, TTL)
@@ -85,7 +97,7 @@ def changeDNS(line, s_info, c_info, domain, sub_domain, cloud):
             for info in s_info:
                 if create_num == 0 or len(c_info) == 0:
                     break
-                cf_ip = c_info.pop(random.randint(0,len(c_info)-1))["ip"]
+                cf_ip = c_info.pop(random.randint(0,len(c_info)-1))
                 if cf_ip in str(s_info):
                     create_num += 1
                     continue
@@ -102,20 +114,23 @@ def main(cloud):
     global AFFECT_NUM, RECORD_TYPE
     if len(DOMAINS) > 0:
         try:
-            cfips = get_optimization_ip()
-            if cfips == None or cfips["code"] != 200:
-                print("GET CLOUDFLARE IP ERROR: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) )
-                return
-            cf_cmips = cfips["info"]["CM"]
-            cf_cuips = cfips["info"]["CU"]
-            cf_ctips = cfips["info"]["CT"]
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = {
+                    "CM": executor.submit(get_optimization_ip, "CM"),
+                    "CU": executor.submit(get_optimization_ip, "CU"),
+                    "CT": executor.submit(get_optimization_ip, "CT"),
+                    "AB": executor.submit(get_optimization_ip, "AB"),
+                    "DEF": executor.submit(get_optimization_ip, "DEF")
+                }
+                
+                temp_cf_cmips = futures["CM"].result()
+                temp_cf_cuips = futures["CU"].result()
+                temp_cf_ctips = futures["CT"].result()
+                temp_cf_abips = futures["AB"].result()
+                temp_cf_defips = futures["DEF"].result()
+
             for domain, sub_domains in DOMAINS.items():
                 for sub_domain, lines in sub_domains.items():
-                    temp_cf_cmips = cf_cmips.copy()
-                    temp_cf_cuips = cf_cuips.copy()
-                    temp_cf_ctips = cf_ctips.copy()
-                    temp_cf_abips = cf_ctips.copy()
-                    temp_cf_defips = cf_ctips.copy()
                     if DNS_SERVER == 1:
                         ret = cloud.get_record(domain, 20, sub_domain, "CNAME")
                         if ret["code"] == 0:
@@ -163,15 +178,15 @@ def main(cloud):
                                 def_info.append(info)
                         for line in lines:
                             if line == "CM":
-                                changeDNS("CM", cm_info, temp_cf_cmips, domain, sub_domain, cloud)
+                                changeDNS("CM", cm_info, temp_cf_cmips[:], domain, sub_domain, cloud)
                             elif line == "CU":
-                                changeDNS("CU", cu_info, temp_cf_cuips, domain, sub_domain, cloud)
+                                changeDNS("CU", cu_info, temp_cf_cuips[:], domain, sub_domain, cloud)
                             elif line == "CT":
-                                changeDNS("CT", ct_info, temp_cf_ctips, domain, sub_domain, cloud)
+                                changeDNS("CT", ct_info, temp_cf_ctips[:], domain, sub_domain, cloud)
                             elif line == "AB":
-                                changeDNS("AB", ab_info, temp_cf_abips, domain, sub_domain, cloud)
+                                changeDNS("AB", ab_info, temp_cf_abips[:], domain, sub_domain, cloud)
                             elif line == "DEF":
-                                changeDNS("DEF", def_info, temp_cf_defips, domain, sub_domain, cloud)
+                                changeDNS("DEF", def_info, temp_cf_defips[:], domain, sub_domain, cloud)
         except Exception as e:
             print("CHANGE DNS ERROR: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----MESSAGE: " + str(traceback.print_exc()))
 
